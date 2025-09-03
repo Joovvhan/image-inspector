@@ -27,6 +27,7 @@ if __name__ == "__main__":
     max_scale = 2.0
     threshold = 0.5  # matchTemplate 최소 점수
     min_knn = 5      # KNN 후보 최소 수
+    draw_min_score = 0.1  # 그림 그릴 최소 score
 
     # ORB 생성
     orb = cv2.ORB_create(2000)
@@ -49,7 +50,8 @@ if __name__ == "__main__":
         image_kp_count = 0 if des_img is None else len(kp_img)
 
         if des_img is None or des_patch is None:
-            print(f"{file:<{filename_width}} : patch_kp:{patch_kp_count}, image_kp:{image_kp_count}, KNN 후보:0, scale:0.0, fine_scales:0, max_score:-1.0, MATCHED:False, bbox:")
+            print(f"{file:<{filename_width}} : patch_kp:{patch_kp_count}, image_kp:{image_kp_count}, "
+                  f"KNN 후보:0, scale:0.0, fine_scales:0, max_score:-1.0, MATCHED:False, bbox:")
             continue
 
         # KNN 매칭
@@ -67,7 +69,7 @@ if __name__ == "__main__":
             fine_scales = []
             max_score_overall = -1.0
             found = False
-            bbox_str = ""
+            bbox_dict = {}
         else:
             est_scale = estimate_scale(kp_patch, kp_img, good_matches)
             est_scale = np.clip(est_scale, min_scale, max_scale)
@@ -75,22 +77,66 @@ if __name__ == "__main__":
 
             found = False
             max_score_overall = -1.0
-            bbox_str = ""
+            bbox_dict = {}
             for scale in fine_scales:
                 patch_bgr = cv2.resize(patch_bgr_orig, (0,0), fx=scale, fy=scale)
                 mask = cv2.resize(mask_orig, (0,0), fx=scale, fy=scale)
                 if patch_bgr.shape[0] > image.shape[0] or patch_bgr.shape[1] > image.shape[1]:
                     continue
-                result = cv2.matchTemplate(image, patch_bgr, cv2.TM_CCOEFF_NORMED, mask=mask)
-                max_val = result.max()
-                max_score_overall = max(max_score_overall, max_val)
-                loc = np.where(result >= threshold)
-                if len(loc[0]) > 0:
-                    x, y = loc[1][0], loc[0][0]
-                    bbox_str = f"x0:{x},y0:{y},x1:{x+patch_bgr.shape[1]},y1:{y+patch_bgr.shape[0]}"
-                    found = True
-                    break
 
-        print(f"{file:<{filename_width}} : patch_kp:{patch_kp_count}, image_kp:{image_kp_count}, KNN 후보:{knn_count}, "
-              f"scale:{est_scale:.3f}, fine_scales:{len(fine_scales)}, max_score:{max_score_overall:.3f}, "
-              f"MATCHED:{found}, bbox:{bbox_str}")
+                result = cv2.matchTemplate(image, patch_bgr, cv2.TM_CCOEFF_NORMED, mask=mask)
+                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+                
+                # 최고점 기록
+                if max_val > max_score_overall:
+                    max_score_overall = max_val
+                    if max_val >= threshold:
+                        x, y = max_loc
+                        bbox_dict = {
+                            "x0": x,
+                            "y0": y,
+                            "x1": x + patch_bgr.shape[1],
+                            "y1": y + patch_bgr.shape[0]
+                        }
+                        found = True
+
+        bbox_str = ""
+        if bbox_dict:
+            bbox_str = f"x0:{bbox_dict['x0']},y0:{bbox_dict['y0']},x1:{bbox_dict['x1']},y1:{bbox_dict['y1']}"
+
+        print(f"{file:<{filename_width}} : patch_kp:{patch_kp_count}, image_kp:{image_kp_count}, "
+              f"KNN 후보:{knn_count}, scale:{est_scale:.3f}, fine_scales:{len(fine_scales)}, "
+              f"max_score:{max_score_overall:.3f}, MATCHED:{found}, bbox:{bbox_str}")
+
+        # 이미지 띄우기: MATCHED거나 최소 점수 이상이면
+        if found:
+            display_img = image.copy()
+            if bbox_dict:
+                x0, y0, x1, y1 = bbox_dict["x0"], bbox_dict["y0"], bbox_dict["x1"], bbox_dict["y1"]
+                cv2.rectangle(display_img, (x0, y0), (x1, y1), (0, 0, 255), 2)
+                
+                # 점수 텍스트 추가 (BBOX 안쪽 좌상단)
+                score_text = f"{max_score_overall:.2f}"
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.5
+                thickness = 1
+                text_size, _ = cv2.getTextSize(score_text, font, font_scale, thickness)
+                
+                # 텍스트 위치: BBOX 안쪽 좌상단, 약간 패딩
+                padding = 3
+                text_x = x0 + padding
+                text_y = y0 + text_size[1] + padding  # y는 baseline 고려
+                
+                # 배경 사각형 그리기 (선택 사항, 텍스트 가독성 향상)
+                cv2.rectangle(display_img,
+                            (x0, y0),
+                            (x0 + text_size[0] + 2*padding, y0 + text_size[1] + 2*padding),
+                            (0, 0, 255), -1)  # 배경: 빨강, 채우기
+                
+                # 텍스트 그리기 (배경 위에)
+                cv2.putText(display_img, score_text, (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
+
+            cv2.imshow(f"PATCH MATCH: {file}", display_img)
+            cv2.waitKey(1)
+
+    cv2.waitKey(0)
