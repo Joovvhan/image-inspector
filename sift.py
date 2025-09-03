@@ -78,6 +78,7 @@ if __name__ == "__main__":
             found = False
             max_score_overall = -1.0
             bbox_dict = {}
+
             for scale in fine_scales:
                 patch_bgr = cv2.resize(patch_bgr_orig, (0,0), fx=scale, fy=scale)
                 mask = cv2.resize(mask_orig, (0,0), fx=scale, fy=scale)
@@ -86,19 +87,14 @@ if __name__ == "__main__":
 
                 result = cv2.matchTemplate(image, patch_bgr, cv2.TM_CCOEFF_NORMED, mask=mask)
                 min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-                
-                # 최고점 기록
+
                 if max_val > max_score_overall:
                     max_score_overall = max_val
                     if max_val >= threshold:
                         x, y = max_loc
-                        bbox_dict = {
-                            "x0": x,
-                            "y0": y,
-                            "x1": x + patch_bgr.shape[1],
-                            "y1": y + patch_bgr.shape[0]
-                        }
+                        bbox_dict = {"x0": x, "y0": y, "x1": x+patch_bgr.shape[1], "y1": y+patch_bgr.shape[0]}
                         found = True
+                        best_result = result  # 최고점 스케일의 matchTemplate 결과 저장
 
         bbox_str = ""
         if bbox_dict:
@@ -109,34 +105,54 @@ if __name__ == "__main__":
               f"max_score:{max_score_overall:.3f}, MATCHED:{found}, bbox:{bbox_str}")
 
         # 이미지 띄우기: MATCHED거나 최소 점수 이상이면
-        if found:
+        if found and bbox_dict:
             display_img = image.copy()
-            if bbox_dict:
-                x0, y0, x1, y1 = bbox_dict["x0"], bbox_dict["y0"], bbox_dict["x1"], bbox_dict["y1"]
-                cv2.rectangle(display_img, (x0, y0), (x1, y1), (0, 0, 255), 2)
-                
-                # 점수 텍스트 추가 (BBOX 안쪽 좌상단)
-                score_text = f"{max_score_overall:.2f}"
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.5
-                thickness = 1
-                text_size, _ = cv2.getTextSize(score_text, font, font_scale, thickness)
-                
-                # 텍스트 위치: BBOX 안쪽 좌상단, 약간 패딩
-                padding = 3
-                text_x = x0 + padding
-                text_y = y0 + text_size[1] + padding  # y는 baseline 고려
-                
-                # 배경 사각형 그리기 (선택 사항, 텍스트 가독성 향상)
-                cv2.rectangle(display_img,
-                            (x0, y0),
-                            (x0 + text_size[0] + 2*padding, y0 + text_size[1] + 2*padding),
-                            (0, 0, 255), -1)  # 배경: 빨강, 채우기
-                
-                # 텍스트 그리기 (배경 위에)
-                cv2.putText(display_img, score_text, (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
+            x0, y0, x1, y1 = bbox_dict["x0"], bbox_dict["y0"], bbox_dict["x1"], bbox_dict["y1"]
+            patch_h, patch_w = y1 - y0, x1 - x0
+
+            # BBOX 사각형
+            cv2.rectangle(display_img, (x0, y0), (x1, y1), (0, 0, 255), 2)
+
+            # 점수 텍스트
+            score_text = f"{max_score_overall:.2f}"
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.5
+            thickness = 1
+            text_size, _ = cv2.getTextSize(score_text, font, font_scale, thickness)
+            padding = 3
+            text_x = x0 + padding
+            text_y = y0 + text_size[1] + padding
+            cv2.rectangle(display_img,
+                        (x0, y0),
+                        (x0 + text_size[0] + 2*padding, y0 + text_size[1] + 2*padding),
+                        (0, 0, 255), -1)
+            cv2.putText(display_img, score_text, (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
+
+            # -----------------------------------------------------------------
+            # 히트맵 제거
+            # result_resized = cv2.resize(best_result, (patch_w, patch_h))
+            # norm_result = np.clip(result_resized, 0, 1)  # 0~1
+
+            # patch 원본 알파 resize
+            # patch_alpha_resized = cv2.resize(mask_orig, (patch_w, patch_h))
+            # patch_alpha_resized = (patch_alpha_resized > 0).astype(np.uint8)  # 1=유효, 0=무시
+
+            # ggplot heat 스타일 (alpha 포함)
+            # heatmap = np.zeros((patch_h, patch_w, 4), dtype=np.uint8)
+            # heatmap[..., 0] = (norm_result * 255).astype(np.uint8)          # Blue
+            # heatmap[..., 1] = ((1 - norm_result) * 255).astype(np.uint8)    # Green
+            # heatmap[..., 2] = 255                                           # Red
+            # heatmap[..., 3] = (norm_result * 180 * patch_alpha_resized).astype(np.uint8)  # alpha 적용 + 알파 영역 제외
+
+            # overlay
+            # overlay = display_img[y0:y1, x0:x1].astype(np.float32)
+            # alpha = heatmap[..., 3:4].astype(np.float32)/255.0
+            # display_img[y0:y1, x0:x1] = (1-alpha)*overlay + alpha*heatmap[..., :3].astype(np.float32)
+            # display_img = display_img.astype(np.uint8)
+            # -----------------------------------------------------------------
 
             cv2.imshow(f"PATCH MATCH: {file}", display_img)
             cv2.waitKey(1)
 
     cv2.waitKey(0)
+    cv2.destroyAllWindows()
